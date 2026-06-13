@@ -1,0 +1,22 @@
+# API keys and local config — NEVER commit these
+local.properties
+
+# Build outputs
+app/build/
+build/
+.gradle/
+
+# Android Studio / IntelliJ
+.idea/
+*.iml
+.navigation/
+captures/
+.externalNativeBuild/
+.cxx/
+
+# Kotlin
+*.kotlin_module
+
+# OS
+.DS_Store
+Thumbs.db
