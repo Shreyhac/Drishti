@@ -17,6 +17,16 @@ class SpeechInput(private val context: Context) {
     private val mainHandler = Handler(Looper.getMainLooper())
     private var isListening = false
 
+    // Pre-create the recognizer at startup so the first PTT press is instant.
+    // Recreating it on every call (the old approach) added ~300-500ms of cold-start lag.
+    fun warmUp() {
+        mainHandler.post {
+            if (recognizer == null && SpeechRecognizer.isRecognitionAvailable(context)) {
+                recognizer = SpeechRecognizer.createSpeechRecognizer(context)
+            }
+        }
+    }
+
     fun startListening(
         language: AppLanguage,
         onPartial: (String) -> Unit,      // called as user speaks — shows live text
@@ -25,18 +35,19 @@ class SpeechInput(private val context: Context) {
     ) {
         // SpeechRecognizer must be created and called on the main thread
         mainHandler.post {
-            if (isListening) {
-                recognizer?.stopListening()
-            }
-
             if (!SpeechRecognizer.isRecognitionAvailable(context)) {
                 onError("Speech recognition not available on this device")
                 return@post
             }
 
-            // Create fresh instance each time to avoid "recognizer busy" error 8
-            recognizer?.destroy()
-            recognizer = SpeechRecognizer.createSpeechRecognizer(context)
+            // Reuse the warmed-up instance; cancel() resets it without the cost of
+            // destroy()+create(). Only create if it doesn't exist yet.
+            if (recognizer == null) {
+                recognizer = SpeechRecognizer.createSpeechRecognizer(context)
+            } else {
+                recognizer?.cancel()
+            }
+            isListening = false
 
             recognizer?.setRecognitionListener(object : RecognitionListener {
                 override fun onReadyForSpeech(params: Bundle?) {
@@ -65,13 +76,16 @@ class SpeechInput(private val context: Context) {
 
                 override fun onResults(results: Bundle?) {
                     isListening = false
-                    val text = results
+                    val candidates = results
                         ?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
-                        ?.firstOrNull()
+                        ?: arrayListOf()
+                    // Pick the longest non-blank result (more words = better capture)
+                    val text = candidates.filter { it.isNotBlank() }
+                        .maxByOrNull { it.length }
                         .orEmpty()
                         .trim()
                     if (text.isNotBlank()) {
-                        Log.d("STT", "Result: $text")
+                        Log.d("STT", "Result: $text (candidates: $candidates)")
                         onResult(text)
                     } else {
                         onError("Nothing heard — please try again")
@@ -93,21 +107,30 @@ class SpeechInput(private val context: Context) {
                         else -> "Mic error ($error)"
                     }
                     Log.w("STT", "Error $error: $msg")
+                    // A busy/client error means the reused instance is in a bad state —
+                    // destroy it so the next press creates a clean one.
+                    if (error == SpeechRecognizer.ERROR_RECOGNIZER_BUSY ||
+                        error == SpeechRecognizer.ERROR_CLIENT) {
+                        recognizer?.destroy()
+                        recognizer = null
+                    }
                     onError(msg)
                 }
             })
 
             val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
                 putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
-                putExtra(RecognizerIntent.EXTRA_LANGUAGE, language.code)
+                // Always accept English for commands regardless of TTS language.
+                // EXTRA_LANGUAGE = device default (usually en-IN), EXTRA_LANGUAGE_PREFERENCE = app TTS language.
+                // This way "QR mode" in English is always understood even if TTS is set to Hindi.
+                putExtra(RecognizerIntent.EXTRA_LANGUAGE, java.util.Locale.getDefault().toLanguageTag())
                 putExtra(RecognizerIntent.EXTRA_LANGUAGE_PREFERENCE, language.code)
                 putExtra(RecognizerIntent.EXTRA_ONLY_RETURN_LANGUAGE_PREFERENCE, false)
-                putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true)  // live partial feedback
-                putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 1)
-                // Silence timeouts — give user time to think
-                putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS, 2000L)
+                putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true)
+                putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 3)
+                putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS, 2500L)
                 putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_POSSIBLY_COMPLETE_SILENCE_LENGTH_MILLIS, 1500L)
-                putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_MINIMUM_LENGTH_MILLIS, 500L)
+                putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_MINIMUM_LENGTH_MILLIS, 300L)
             }
             recognizer?.startListening(intent)
         }

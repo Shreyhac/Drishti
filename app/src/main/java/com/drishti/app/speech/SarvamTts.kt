@@ -32,10 +32,10 @@ class SarvamTts(private val context: Context) {
     private var currentPlayer: MediaPlayer? = null
 
     // Returns true on success, false if caller should fall back to Android TTS
-    suspend fun speak(text: String, lang: AppLanguage): Boolean {
+    suspend fun speak(text: String, lang: AppLanguage, pace: Double = 1.1): Boolean {
         if (apiKey.isBlank()) return false
         return try {
-            val bytes = fetchAudio(text, lang)
+            val bytes = fetchAudio(text, lang, pace)
             playBytes(bytes)
             true
         } catch (e: Exception) {
@@ -53,20 +53,23 @@ class SarvamTts(private val context: Context) {
 
     fun release() = stop()
 
-    private suspend fun fetchAudio(text: String, lang: AppLanguage): ByteArray = withContext(Dispatchers.IO) {
-        val (langCode, speaker) = when (lang) {
-            AppLanguage.HINDI    -> "hi-IN"  to "meera"
-            AppLanguage.ENGLISH  -> "en-IN"  to "meera"
-            AppLanguage.KANNADA  -> "kn-IN"  to "meera"
+    private suspend fun fetchAudio(text: String, lang: AppLanguage, pace: Double = 1.1): ByteArray = withContext(Dispatchers.IO) {
+        val langCode = when (lang) {
+            AppLanguage.HINDI   -> "hi-IN"
+            AppLanguage.ENGLISH -> "en-IN"
+            AppLanguage.KANNADA -> "kn-IN"
+            AppLanguage.TAMIL   -> "ta-IN"
+            AppLanguage.TELUGU  -> "te-IN"
+            AppLanguage.BENGALI -> "bn-IN"
         }
 
         val body = JSONObject().apply {
             put("inputs", JSONArray().put(text))
             put("target_language_code", langCode)
-            put("speaker", speaker)
-            put("pitch", 0)
-            put("pace", 1.1)
-            put("loudness", 1.5)
+            put("speaker", "meera")
+            put("pitch", -0.2)      // slightly lower = warmer, less shrill
+            put("pace", pace)
+            put("loudness", 1.0)    // was 1.5 (harsh) — softer now that device volume is boosted
             put("speech_sample_rate", 22050)
             put("enable_preprocessing", true)
             put("model", "bulbul:v1")

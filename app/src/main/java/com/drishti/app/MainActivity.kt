@@ -1,6 +1,7 @@
 package com.drishti.app
 
 import android.Manifest
+import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Bundle
 import android.view.KeyEvent
@@ -19,12 +20,26 @@ class MainActivity : ComponentActivity() {
     val cameraGranted = MutableStateFlow(false)
     val micGranted = MutableStateFlow(false)
 
-    // Volume DOWN = capture photo
+    // Vol DOWN or shake → scan (or stop TTS if speaking — handled in DrishtiScreen)
     val scanTrigger = MutableStateFlow(0)
 
-    // Volume UP held = push to talk; release = stop listening
+    // Vol UP held = push to talk; release = stop listening
     val pttStartTrigger = MutableStateFlow(0)
     val pttStopTrigger = MutableStateFlow(0)
+
+    // Accelerometer fall detected → DrishtiScreen starts the cancelable SOS countdown
+    val fallTrigger = MutableStateFlow(0)
+
+    private lateinit var shakeDetector: ShakeDetector
+    private lateinit var fallDetector: FallDetector
+
+    // Camera + mic are required; location + SMS are requested for the emergency SOS feature
+    private val requestedPermissions = arrayOf(
+        Manifest.permission.CAMERA,
+        Manifest.permission.RECORD_AUDIO,
+        Manifest.permission.ACCESS_FINE_LOCATION,
+        Manifest.permission.SEND_SMS
+    )
 
     private val permLauncher = registerForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
@@ -42,9 +57,15 @@ class MainActivity : ComponentActivity() {
         cameraGranted.value = hasPermission(Manifest.permission.CAMERA)
         micGranted.value = hasPermission(Manifest.permission.RECORD_AUDIO)
 
-        if (!cameraGranted.value || !micGranted.value) {
-            permLauncher.launch(arrayOf(Manifest.permission.CAMERA, Manifest.permission.RECORD_AUDIO))
+        // Request anything not yet granted (camera, mic, location, SMS)
+        val missing = requestedPermissions.filter { !hasPermission(it) }
+        if (missing.isNotEmpty()) {
+            permLauncher.launch(missing.toTypedArray())
         }
+
+        // Shake fires same trigger as Vol DOWN; DrishtiScreen decides stop-vs-scan based on state
+        shakeDetector = ShakeDetector(this) { scanTrigger.value++ }
+        fallDetector = FallDetector(this) { fallTrigger.value++ }
 
         setContent {
             DrishtiTheme {
@@ -54,20 +75,45 @@ class MainActivity : ComponentActivity() {
                     scanTriggerFlow = scanTrigger,
                     pttStartFlow = pttStartTrigger,
                     pttStopFlow = pttStopTrigger,
+                    fallFlow = fallTrigger,
                     onRequestPermissions = {
-                        permLauncher.launch(arrayOf(Manifest.permission.CAMERA, Manifest.permission.RECORD_AUDIO))
+                        permLauncher.launch(requestedPermissions)
                     }
                 )
             }
         }
+
+        // Launched from Quick Settings tile
+        if (intent.getBooleanExtra("TILE_SCAN", false)) {
+            scanTrigger.value++
+        }
     }
 
-    // Volume DOWN → capture; Volume UP keyDown → start PTT
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        if (intent.getBooleanExtra("TILE_SCAN", false)) {
+            scanTrigger.value++
+        }
+    }
+
+    override fun onResume() {
+        super.onResume()
+        shakeDetector.register()
+        fallDetector.register()
+    }
+
+    override fun onPause() {
+        super.onPause()
+        shakeDetector.unregister()
+        fallDetector.unregister()
+    }
+
+    // Vol DOWN → scan / stop TTS (state check happens in DrishtiScreen)
+    // Vol UP held → push-to-talk; release → stop listening
     override fun onKeyDown(keyCode: Int, event: KeyEvent): Boolean {
         return when (keyCode) {
             KeyEvent.KEYCODE_VOLUME_DOWN -> { scanTrigger.value++; true }
             KeyEvent.KEYCODE_VOLUME_UP -> {
-                // Only fire once even if key is held (autoRepeat)
                 if (event.repeatCount == 0) pttStartTrigger.value++
                 true
             }
@@ -75,7 +121,6 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    // Volume UP release → stop PTT
     override fun onKeyUp(keyCode: Int, event: KeyEvent): Boolean {
         if (keyCode == KeyEvent.KEYCODE_VOLUME_UP) {
             pttStopTrigger.value++

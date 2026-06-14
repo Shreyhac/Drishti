@@ -52,7 +52,11 @@ android {
 
     packaging {
         resources { excludes += "/META-INF/{AL2.0,LGPL2.1}" }
+        jniLibs { pickFirsts += "**/*.so" }
     }
+
+    // TFLite model must stay uncompressed to be memory-mapped at runtime
+    androidResources { noCompress += "tflite" }
 }
 
 dependencies {
@@ -75,6 +79,9 @@ dependencies {
     implementation("androidx.camera:camera-lifecycle:1.3.4")
     implementation("androidx.camera:camera-view:1.3.4")
 
+    // Google Play Services — fused location for emergency SOS GPS
+    implementation("com.google.android.gms:play-services-location:21.3.0")
+
     // ML Kit — OCR (Latin + Devanagari for Hindi)
     implementation("com.google.mlkit:text-recognition:16.0.0")
     implementation("com.google.mlkit:text-recognition-devanagari:16.0.0")
@@ -82,8 +89,23 @@ dependencies {
     // ML Kit — Image Labeling (object / currency detection)
     implementation("com.google.mlkit:image-labeling:17.0.7")
 
+    // ML Kit — Barcode / QR scanning
+    implementation("com.google.mlkit:barcode-scanning:17.2.0")
+
+    // ML Kit — Face detection (position, smile, eyes)
+    implementation("com.google.mlkit:face-detection:16.1.5")
+
+    // ML Kit — Object detection with bounding boxes (obstacle assistant, find-my-object)
+    implementation("com.google.mlkit:object-detection:17.0.2")
+
     // MediaPipe — On-device Gemma LLM
     implementation("com.google.mediapipe:tasks-genai:0.10.14")
+
+    // MediaPipe — Gesture recognizer (deaf communication, sign language)
+    implementation("com.google.mediapipe:tasks-vision:0.10.14")
+
+    // TensorFlow Lite — FaceNet embeddings for recognizing saved people
+    implementation("org.tensorflow:tensorflow-lite:2.14.0")
 
     // OkHttp — OpenRouter cloud fallback
     implementation("com.squareup.okhttp3:okhttp:4.12.0")

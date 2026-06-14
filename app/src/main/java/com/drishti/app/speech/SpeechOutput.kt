@@ -1,10 +1,12 @@
 package com.drishti.app.speech
 
 import android.content.Context
+import android.media.AudioManager
 import android.speech.tts.TextToSpeech
 import android.speech.tts.UtteranceProgressListener
 import android.util.Log
 import com.drishti.app.AppLanguage
+import com.drishti.app.TtsSpeed
 import kotlinx.coroutines.suspendCancellableCoroutine
 import java.util.Locale
 import kotlin.coroutines.resume
@@ -14,6 +16,30 @@ class SpeechOutput(private val context: Context) {
     private var tts: TextToSpeech? = null
     private var androidReady = false
     val sarvam = SarvamTts(context)
+
+    private val audioManager = context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
+    private var savedVolume: Int? = null
+
+    // Boost media stream to full so a blind user hears clearly over background noise.
+    // Original volume is restored once speech finishes.
+    private fun boostVolume() {
+        if (savedVolume != null) return // already boosted
+        val max = audioManager.getStreamMaxVolume(AudioManager.STREAM_MUSIC)
+        savedVolume = audioManager.getStreamVolume(AudioManager.STREAM_MUSIC)
+        try {
+            audioManager.setStreamVolume(AudioManager.STREAM_MUSIC, max, 0)
+        } catch (e: SecurityException) {
+            Log.w("TTS", "Could not raise volume (Do Not Disturb?): ${e.message}")
+        }
+    }
+
+    private fun restoreVolume() {
+        val v = savedVolume ?: return
+        try {
+            audioManager.setStreamVolume(AudioManager.STREAM_MUSIC, v, 0)
+        } catch (_: SecurityException) {}
+        savedVolume = null
+    }
 
     init {
         tts = TextToSpeech(context) { status ->
@@ -49,21 +75,24 @@ class SpeechOutput(private val context: Context) {
     }
 
     // Tries Sarvam TTS (online, much better Indian voices) → falls back to Android TTS (offline)
-    suspend fun speak(text: String, lang: AppLanguage, isOnline: Boolean) {
+    suspend fun speak(text: String, lang: AppLanguage, isOnline: Boolean, speed: TtsSpeed = TtsSpeed.NORMAL) {
         if (text.isBlank()) return
         stop()
-
-        if (isOnline) {
-            val ok = sarvam.speak(text, lang)
-            if (ok) return
-            // Sarvam failed — fall through to Android TTS
+        boostVolume()
+        try {
+            if (isOnline) {
+                val ok = sarvam.speak(text, lang, speed.sarvamPace)
+                if (ok) return
+                // Sarvam failed — fall through to Android TTS
+            }
+            speakAndroid(text, lang, speed.androidRate)
+        } finally {
+            restoreVolume()
         }
-
-        speakAndroid(text, lang)
     }
 
     // Suspend until Android TTS finishes speaking
-    private suspend fun speakAndroid(text: String, lang: AppLanguage) = suspendCancellableCoroutine<Unit> { cont ->
+    private suspend fun speakAndroid(text: String, lang: AppLanguage, rate: Float = 0.92f) = suspendCancellableCoroutine<Unit> { cont ->
         if (!androidReady) { cont.resume(Unit); return@suspendCancellableCoroutine }
 
         val id = "drishti_${System.currentTimeMillis()}"
@@ -82,13 +111,15 @@ class SpeechOutput(private val context: Context) {
         cont.invokeOnCancellation { tts?.stop() }
 
         setLanguage(lang)
-        tts?.setSpeechRate(0.92f)
+        tts?.setSpeechRate(rate)
+        tts?.setPitch(0.95f)   // slightly lower pitch = calmer, less robotic
         tts?.speak(text, TextToSpeech.QUEUE_FLUSH, null, id)
     }
 
     fun stop() {
         sarvam.stop()
         tts?.stop()
+        restoreVolume()
     }
 
     fun release() {
